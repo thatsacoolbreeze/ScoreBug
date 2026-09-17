@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ScoreBug Overlay - Updated</title>
+  <meta name="scorebug-version" content="2026-09-16">
+  <style>
+    :root { --duration: 90s; --bg: #0c1216; --red: #e10600; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); color: white; font: 14px 'Segoe UI', sans-serif; }
+    body { border-top: 4px solid var(--red); }
+    #bar { height: 66px; display: flex; align-items: center; overflow: hidden; cursor: pointer; background: linear-gradient(90deg, #111, #1c252a, #111); }
+    #track { display: flex; width: max-content; gap: 36px; padding: 0 20px; white-space: nowrap; animation: scroll var(--duration) linear infinite; }
+    #track.paused { animation-play-state: paused; }
+    @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+    .game { display: inline-flex; align-items: center; gap: 12px; padding: 8px 14px; border: 1px solid #35434a; border-radius: 5px; background: #182126; }
+    .league { padding: 4px 7px; background: var(--red); font-size: 11px; font-weight: 800; }
+    .teams { display: grid; gap: 3px; font-weight: 700; }
+    .team { display: flex; gap: 18px; justify-content: space-between; }
+    .score { font-weight: 900; }
+    .detail { color: #9eabb0; font-size: 11px; }
+    .live { color: #35e28a; } .final { color: #ffd166; }
+    #settings { position: absolute; z-index: 5; inset: 0; display: none; align-items: center; gap: 12px; padding: 10px 150px 10px 18px; background: #101b20; }
+    #settings.open { display: flex; }
+    #settings label { color: #b8c3c7; font-size: 12px; }
+    input, button { border: 1px solid #53636a; border-radius: 4px; padding: 7px 9px; background: #172329; color: white; }
+    button { cursor: pointer; } button:hover { border-color: var(--red); background: #3a2022; }
+    #close { position: absolute; top: 12px; right: 18px; border-color: #e10600; background: #3a2022; font-weight: 700; }
+    #status { margin-left: auto; color: #a7b2b6; font-size: 11px; }
+    .empty { padding: 18px; color: #a7b2b6; }
+  </style>
+</head>
+<body>
+  <div id="bar" title="Click for score settings"><div id="track"><div class="empty">Loading scores...</div></div></div>
+  <div id="settings">
+    <label for="date">Date</label><input id="date" type="date"><button id="today">Today</button>
+    <label for="speed">Speed</label><input id="speed" type="range" min="30" max="180" value="90"><span id="speedText">90s</span>
+    <button data-sport="all">All</button><button data-sport="nfl">NFL</button><button data-sport="nhl">NHL</button><button data-sport="cfb">NCAA</button><button data-sport="mlb">MLB</button>
+    <button id="apply">Apply</button><button id="close">Back to ticker</button><span id="status">Loading...</span>
+  </div>
+  <script>
+    const feeds = {
+      nfl: 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard',
+      nhl: 'https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard',
+      cfb: 'https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard',
+      mlb: 'https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard'
+    };
+    const bar = document.querySelector('#bar');
+    const track = document.querySelector('#track');
+    const settings = document.querySelector('#settings');
+    const date = document.querySelector('#date');
+    const speed = document.querySelector('#speed');
+    const speedText = document.querySelector('#speedText');
+    const status = document.querySelector('#status');
+    let selectedSport = 'all';
+    const now = new Date();
+    date.value = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+    function safe(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c])); }
+    async function loadScores() {
+      status.textContent = 'Updating...';
+      const dateQuery = date.value.replaceAll('-', '');
+      const results = await Promise.all(Object.entries(feeds).map(async ([sport, url]) => {
+        try {
+          const response = await fetch(`${url}?dates=${dateQuery}`);
+          if (!response.ok) throw new Error(response.status);
+          const data = await response.json();
+          return (data.events || []).map(event => {
+            const teams = event.competitions?.[0]?.competitors || [];
+            const home = teams.find(team => team.homeAway === 'home');
+            const away = teams.find(team => team.homeAway === 'away');
+            return { sport, home: home?.team?.abbreviation || 'HOME', away: away?.team?.abbreviation || 'AWAY', homeScore: home?.score ?? '-', awayScore: away?.score ?? '-', state: event.status?.type?.state || 'pre', detail: event.status?.type?.shortDetail || event.status?.type?.description || 'Scheduled' };
+          });
+        } catch (error) { console.warn(`${sport} unavailable`, error); return []; }
+      }));
+      const games = results.flat().filter(game => selectedSport === 'all' || game.sport === selectedSport);
+      const html = games.length ? games.map(game => `<div class="game"><span class="league">${safe(game.sport.toUpperCase())}</span><div class="teams"><div class="team"><span>${safe(game.away)}</span><span class="score">${safe(game.awayScore)}</span></div><div class="team"><span>${safe(game.home)}</span><span class="score">${safe(game.homeScore)}</span></div></div><span class="detail ${game.state === 'in' ? 'live' : game.state === 'post' ? 'final' : ''}">${safe(game.detail)}</span></div>`).join('') : `<div class="empty">No games found for ${safe(date.value)}</div>`;
+      track.innerHTML = html + html;
+      status.textContent = `${date.value} | ${games.length} games`;
+    }
+    bar.addEventListener('click', () => { settings.classList.add('open'); bar.style.display = 'none'; });
+    document.querySelector('#close').addEventListener('click', () => { settings.classList.remove('open'); bar.style.display = 'flex'; });
+    document.querySelector('#apply').addEventListener('click', () => { settings.classList.remove('open'); bar.style.display = 'flex'; loadScores(); });
+    date.addEventListener('change', loadScores);
+    document.querySelector('#today').addEventListener('click', () => {
+      const current = new Date();
+      date.value = new Date(current.getTime() - current.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+      loadScores();
+    });
+    document.addEventListener('keydown', event => { if (event.key === 'Escape' && settings.classList.contains('open')) { settings.classList.remove('open'); bar.style.display = 'flex'; } });
+    document.querySelectorAll('[data-sport]').forEach(button => button.addEventListener('click', () => { selectedSport = button.dataset.sport; document.querySelectorAll('[data-sport]').forEach(item => item.style.borderColor = ''); button.style.borderColor = '#e10600'; loadScores(); }));
+    speed.addEventListener('input', () => { speedText.textContent = `${speed.value}s`; document.documentElement.style.setProperty('--duration', `${speed.value}s`); });
+    loadScores();
+    setInterval(loadScores, 45000);
+  </script>
+</body>
+</html>
