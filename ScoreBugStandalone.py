@@ -73,6 +73,9 @@ class ScoreBugApp:
         self.selected_date = date.today().isoformat()
         self.selected_sport = "ALL"
         self.duration = 90
+        self.refresh_mode = "cycle"
+        self.refresh_interval_seconds = 90
+        self.refresh_job = None
         # This list starts empty and is filled after ESPN responds.
         self.games: list[dict[str, str]] = []
         # The first drawing starts just off the right side of the screen.
@@ -99,7 +102,7 @@ class ScoreBugApp:
         self.root.after(35, self.animate)
         self.root.after(250, self.check_results)
         self.root.after(300, self.refresh)
-        self.root.after(45000, self.periodic_refresh)
+        self.schedule_refresh()
 
     def fetch_feed(self, url: str, date_query: str) -> dict:
         """Download one league's dated scoreboard, with a fallback route."""
@@ -220,14 +223,32 @@ class ScoreBugApp:
             items = self.canvas.bbox("ticker")
             if items and self.scroll_x < -max(200, items[2] // 2):
                 self.scroll_x = self.root.winfo_width()
+                if self.refresh_mode == "cycle":
+                    self.refresh()
             # Move the existing drawing instead of creating a new drawing each frame.
             self.canvas.coords("ticker", self.scroll_x, 37)
         self.root.after(max(15, int(self.duration * 35 / 90)), self.animate)
 
+    def schedule_refresh(self) -> None:
+        """Schedule the next periodic refresh based on the chosen mode."""
+        if self.refresh_job is not None:
+            try:
+                self.root.after_cancel(self.refresh_job)
+            except Exception:
+                pass
+            self.refresh_job = None
+
+        if self.refresh_mode != "timer":
+            return
+
+        self.refresh_job = self.root.after(self.refresh_interval_seconds * 1000, self.periodic_refresh)
+
     def periodic_refresh(self) -> None:
-        """Refresh scores every 45 seconds."""
+        """Refresh scores on the selected interval or after a completed cycle."""
+        if self.refresh_mode != "timer":
+            return
         self.refresh()
-        self.root.after(45000, self.periodic_refresh)
+        self.schedule_refresh()
 
     def open_settings(self, _event=None) -> None:
         """Open the date, speed, sport, and return controls."""
@@ -237,7 +258,7 @@ class ScoreBugApp:
         settings.attributes("-topmost", True)
         settings.resizable(False, False)
         settings.configure(bg="#101b20")
-        settings.geometry("520x180")
+        settings.geometry("560x240")
 
         tk.Label(settings, text="Date (YYYY-MM-DD)", bg="#101b20", fg="#dce5e8").grid(row=0, column=0, padx=10, pady=12, sticky="w")
         # StringVar connects a Python value to an Entry text box.
@@ -257,6 +278,16 @@ class ScoreBugApp:
         sport.set(self.selected_sport)
         sport.grid(row=2, column=1, sticky="w")
 
+        tk.Label(settings, text="Auto refresh", bg="#101b20", fg="#dce5e8").grid(row=3, column=0, padx=10, pady=8, sticky="w")
+        refresh_mode = ttk.Combobox(settings, values=["Cycle complete", "Every N seconds"], state="readonly", width=16)
+        refresh_mode.set("Cycle complete" if self.refresh_mode == "cycle" else "Every N seconds")
+        refresh_mode.grid(row=3, column=1, sticky="w")
+
+        tk.Label(settings, text="Seconds", bg="#101b20", fg="#dce5e8").grid(row=4, column=0, padx=10, pady=8, sticky="w")
+        interval = tk.Scale(settings, from_=30, to=600, orient="horizontal", length=180, bg="#101b20", fg="white", highlightthickness=0)
+        interval.set(self.refresh_interval_seconds)
+        interval.grid(row=4, column=1, columnspan=2, sticky="w")
+
         def apply_and_close() -> None:
             """Validate settings, save them, close the dialog, and reload."""
             try:
@@ -270,12 +301,15 @@ class ScoreBugApp:
             self.selected_date = chosen
             self.selected_sport = sport.get()
             self.duration = int(speed.get())
+            self.refresh_mode = "cycle" if refresh_mode.get() == "Cycle complete" else "timer"
+            self.refresh_interval_seconds = int(interval.get())
             settings.destroy()
+            self.schedule_refresh()
             # Closing the dialog and refreshing makes the change visible.
             self.refresh()
 
-        tk.Button(settings, text="Apply and refresh", command=apply_and_close).grid(row=3, column=1, pady=12, sticky="w")
-        tk.Button(settings, text="Back to ticker", command=settings.destroy).grid(row=3, column=2, pady=12, sticky="w")
+        tk.Button(settings, text="Apply and refresh", command=apply_and_close).grid(row=5, column=1, pady=12, sticky="w")
+        tk.Button(settings, text="Back to ticker", command=settings.destroy).grid(row=5, column=2, pady=12, sticky="w")
         settings.bind("<Escape>", lambda _event: settings.destroy())
         settings.protocol("WM_DELETE_WINDOW", settings.destroy)
 
